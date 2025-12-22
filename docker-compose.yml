@@ -1,9 +1,0 @@
-services:
-  translator-app:
-    build: .
-    ports:
-      - "8501:8501"
-    environment:
-      - translator-key=7oNO0el9VpEW8HazpLeNQ2Da8CJIY9QxziQD7lp06wJmaRuan0E7JQQJ99BLACi0881XJ3w3AAAbACOG1YL7
-      - translator-region=japaneast
-      - translator-endpoint=https://api.cognitive.microsofttranslator.com
