@@ -187,9 +187,17 @@ def translate_sheet_to_new_tabs(
     out_buf.seek(0)
     return out_buf
 
+# --- 言語オプションの定義 ---
+LANG_OPTIONS = {
+    "日本語": "ja",
+    "中国語（繁体字）": "zh-Tw",
+    "英語": "en"
+}
+
 # ---------------------------------------------------------------------
 # Streamlit UI
 # ---------------------------------------------------------------------
+# --- Streamlit UI 修正版 ---
 st.set_page_config(page_title="Excel Translator (Sheet-wide)", page_icon="🌐", layout="centered")
 st.title("Excel翻訳（Azure Translator）")
 
@@ -203,27 +211,49 @@ if missing:
 uploaded = st.file_uploader("Excelファイル（.xlsx）をアップロード", type=["xlsx"])
 
 sheet = st.text_input("対象シート名", "Sheet1")
-to_langs_raw = st.text_input("翻訳先言語（スペース区切り）", "ja")
-from_lang = st.text_input("翻訳元言語（省略時は自動検出）", "zh-Tw")
+
+# --- 言語選択UIの変更箇所 ---
+col1, col2 = st.columns(2)
+
+with col1:
+    # 翻訳元の選択（自動検出をデフォルトにし、3言語を選択肢に含める）
+    from_lang_label = st.selectbox(
+        "翻訳元言語", 
+        ["自動検出"] + list(LANG_OPTIONS.keys()),
+        index=2  # デフォルトを「中国語（繁体字）」にする場合は 2
+    )
+    # 内部用の言語コードに変換
+    from_lang_code = LANG_OPTIONS.get(from_lang_label, None)
+
+with col2:
+    # 翻訳先の選択（複数選択可能）
+    to_lang_labels = st.multiselect(
+        "翻訳先言語（複数選択可）",
+        list(LANG_OPTIONS.keys()),
+        default=["日本語"]
+    )
+    # 内部用の言語コードのリストに変換
+    to_langs = [LANG_OPTIONS[label] for label in to_lang_labels]
+
 text_type = st.selectbox("テキスト種別", ["plain", "html"], index=0)
 category = st.text_input("Custom Translator カテゴリID（任意）", "")
-
 
 run_clicked = st.button("翻訳開始", key="translate_button")
 
 if run_clicked:
     if not uploaded:
         st.error("Excelファイルをアップロードしてください。")
+    elif not to_langs:
+        st.error("翻訳先言語を少なくとも1つ選択してください。")
     else:
         try:
-            to_langs = [x.strip() for x in to_langs_raw.split() if x.strip()]
             st.info(f"シート全体翻訳を実行します: シート={sheet} / 言語={to_langs}")
-            with st.spinner("翻訳中…（シート内の文字列セルを抽出→バッチ翻訳→複製シートへ書き戻し）"):
+            with st.spinner("翻訳中…"):
                 out_buf = translate_sheet_to_new_tabs(
                     xlsx_bytes=uploaded.read(),
                     sheet_name=sheet,
                     to_langs=to_langs,
-                    from_lang=(from_lang or None),
+                    from_lang=from_lang_code, # 変換後のコードを渡す
                     text_type=text_type,
                     category=(category or None),
                 )
@@ -237,4 +267,3 @@ if run_clicked:
             )
         except Exception as e:
             st.error(f"エラー: {e}")
-# --- ここまで差し替え ---
