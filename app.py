@@ -133,57 +133,56 @@ def collect_string_cells(ws: Worksheet) -> Tuple[List[str], List[Tuple[int, int]
     return texts, coords
 
 # ---------------------------------------------------------------------
-# ブック全体処理：指定シートを複製し、言語ごとに全セル翻訳を書き戻し
+# ブック全体処理：全シートをループし、言語ごとに翻訳シートを追加
 # ---------------------------------------------------------------------
-def translate_sheet_to_new_tabs(
+def translate_all_sheets_to_new_tabs(
     xlsx_bytes: bytes,
-    sheet_name: str,
     to_langs: List[str],
     from_lang: Optional[str] = None,
     text_type: str = "plain",
     category: Optional[str] = None,
 ) -> io.BytesIO:
     """
-    アップロードされたブックから sheet_name を複製し、
-    各言語向けに文字列セルを翻訳して書き戻した新タブを追加。
+    アップロードされたブックの全シートを対象に翻訳を行い、
+    「元シート名_言語」という名前の新タブを追加する。
     """
     wb = load_workbook(filename=io.BytesIO(xlsx_bytes), data_only=True)
-    if sheet_name not in wb.sheetnames:
-        raise ValueError(f"シートが見つかりません: {sheet_name}")
-    src_ws: Worksheet = wb[sheet_name]
 
-    # 翻訳対象の文字列セル一覧（値と座標）
-    texts, coords = collect_string_cells(src_ws)
-    total = len(texts)
+    # 処理中にシート構成が変わるのを防ぐため、最初にシート名のリストを取得
+    original_sheet_names = wb.sheetnames
 
-    # 何も翻訳対象がない場合はそのまま返す
-    if total == 0:
-        out_buf = io.BytesIO()
-        wb.save(out_buf); wb.close()
-        out_buf.seek(0)
-        return out_buf
+    for sheet_name in original_sheet_names:
+        src_ws: Worksheet = wb[sheet_name]
 
-    # バッチ翻訳
-    translations = translate_batch(
-        texts=texts,
-        to_langs=to_langs,
-        from_lang=from_lang,
-        text_type=text_type,
-        category=category,
-    )
+        # 1. 翻訳対象の文字列セル一覧を抽出
+        texts, coords = collect_string_cells(src_ws)
+        if not texts:
+            continue  # 文字列がないシートはスキップ
 
-    # 言語ごとにシート複製し、翻訳文字列を書き戻す
-    for lang in to_langs:
-        new_ws = wb.copy_worksheet(src_ws)
-        new_ws.title = f"{sheet_name}_{lang}"
-        lang_texts = translations[lang]
+        # 2. バッチ翻訳
+        translations = translate_batch(
+            texts=texts,
+            to_langs=to_langs,
+            from_lang=from_lang,
+            text_type=text_type,
+            category=category,
+        )
 
-        for i, (r, c) in enumerate(coords):
-            new_ws.cell(row=r, column=c, value=lang_texts[i])
+        # 3. 言語ごとにシート複製し、翻訳文字列を書き戻す
+        for lang in to_langs:
+            new_ws = wb.copy_worksheet(src_ws)
+            # シート名が重複しないよう、31文字制限を考慮しつつ命名
+            new_title = f"{sheet_name}_{lang}"[:31]
+            new_ws.title = new_title
+
+            lang_texts = translations[lang]
+            for i, (r, c) in enumerate(coords):
+                new_ws.cell(row=r, column=c, value=lang_texts[i])
 
     # 出力
     out_buf = io.BytesIO()
-    wb.save(out_buf); wb.close()
+    wb.save(out_buf)
+    wb.close()
     out_buf.seek(0)
     return out_buf
 
@@ -191,15 +190,16 @@ def translate_sheet_to_new_tabs(
 LANG_OPTIONS = {
     "日本語": "ja",
     "中国語（繁体字）": "zh-Tw",
-    "英語": "en"
+    "英語": "en",
+    "韓国語": "ko"
 }
 
 # ---------------------------------------------------------------------
-# Streamlit UI
+# Streamlit UI 修正版
 # ---------------------------------------------------------------------
-# --- Streamlit UI 修正版 ---
-st.set_page_config(page_title="Excel Translator (Sheet-wide)", page_icon="🌐", layout="centered")
+st.set_page_config(page_title="Excel Translator (All Sheets)", page_icon="🌐", layout="centered")
 st.title("Excel翻訳（Azure Translator）")
+st.caption("ファイル内のすべてのシートを対象に翻訳版を作成します")
 
 # 環境変数チェック
 missing = []
@@ -210,60 +210,55 @@ if missing:
 
 uploaded = st.file_uploader("Excelファイル（.xlsx）をアップロード", type=["xlsx"])
 
-sheet = st.text_input("対象シート名", "Sheet1")
-
-# --- 言語選択UIの変更箇所 ---
+# 言語選択UI
 col1, col2 = st.columns(2)
-
 with col1:
-    # 翻訳元の選択（自動検出をデフォルトにし、3言語を選択肢に含める）
     from_lang_label = st.selectbox(
-        "翻訳元言語", 
+        "翻訳元言語",
         ["自動検出"] + list(LANG_OPTIONS.keys()),
-        index=2  # デフォルトを「中国語（繁体字）」にする場合は 2
+        index=2  # デフォルト：中国語（繁体字）
     )
-    # 内部用の言語コードに変換
     from_lang_code = LANG_OPTIONS.get(from_lang_label, None)
 
 with col2:
-    # 翻訳先の選択（複数選択可能）
     to_lang_labels = st.multiselect(
         "翻訳先言語（複数選択可）",
         list(LANG_OPTIONS.keys()),
         default=["日本語"]
     )
-    # 内部用の言語コードのリストに変換
     to_langs = [LANG_OPTIONS[label] for label in to_lang_labels]
 
 text_type = st.selectbox("テキスト種別", ["plain", "html"], index=0)
 category = st.text_input("Custom Translator カテゴリID（任意）", "")
 
-run_clicked = st.button("翻訳開始", key="translate_button")
+run_clicked = st.button("全シート翻訳開始", key="translate_button")
 
 if run_clicked:
     if not uploaded:
         st.error("Excelファイルをアップロードしてください。")
     elif not to_langs:
-        st.error("翻訳先言語を少なくとも1つ選択してください。")
+        st.error("翻訳先言語を選択してください。")
     else:
         try:
-            st.info(f"シート全体翻訳を実行します: シート={sheet} / 言語={to_langs}")
-            with st.spinner("翻訳中…"):
-                out_buf = translate_sheet_to_new_tabs(
-                    xlsx_bytes=uploaded.read(),
-                    sheet_name=sheet,
+            with st.spinner("ファイル全体の翻訳を実行中…（シート数により時間がかかる場合があります）"):
+                # ファイルポインタを先頭に戻す
+                uploaded.seek(0)
+                file_data = uploaded.read()
+
+                out_buf = translate_all_sheets_to_new_tabs(
+                    xlsx_bytes=file_data,
                     to_langs=to_langs,
-                    from_lang=from_lang_code, # 変換後のコードを渡す
+                    from_lang=from_lang_code,
                     text_type=text_type,
                     category=(category or None),
                 )
-            st.success("翻訳完了！ 言語ごとの複製シートを追加しました。")
+            st.success("全シートの翻訳が完了しました！")
             st.download_button(
                 label="結果をダウンロード（xlsx）",
                 data=out_buf,
-                file_name="translated_sheets.xlsx",
+                file_name="all_sheets_translated.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="download_translated"
             )
         except Exception as e:
-            st.error(f"エラー: {e}")
+            st.error(f"エラーが発生しました: {e}")
